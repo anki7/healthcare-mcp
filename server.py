@@ -1,12 +1,15 @@
 import os
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.routing import Route
+from mcp.server.sse import SseServerTransport
+
 from fhir_client import HealthcareAPI
 
-# Create the MCP server
 mcp = FastMCP("healthcare-mcp")
 api = HealthcareAPI()
 
-# ---------- Tools (unchanged) ----------
+# ================= Tools (unchanged) =================
 @mcp.tool()
 async def search_patients(name: str, birthdate: str | None = None) -> str:
     results = await api.search_patients(name, birthdate)
@@ -61,11 +64,22 @@ async def get_patient_prescriptions(patient_id: str, status: str = "active") -> 
     } for r in results[:10]]
     return str(parsed)
 
-# ---------- Main runner ----------
+# ================= SSE Handler (manual transport) =================
+# This works with all mcp versions, no async context manager
+async def handle_sse(request):
+    transport = SseServerTransport("/messages")
+    # Run the server with the transport's read/write streams
+    await mcp.run(transport.read_stream, transport.write_stream,
+                  mcp._create_initialization_capabilities())
+
+routes = [
+    Route("/sse", endpoint=handle_sse)
+]
+starlette_app = Starlette(routes=routes)
+
 if __name__ == "__main__":
     if os.environ.get("TRANSPORT", "stdio") == "sse":
         import uvicorn
-        # FastMCP provides an ASGI app for SSE / HTTP
-        uvicorn.run(mcp.get_asgi_app(), host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+        uvicorn.run(starlette_app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
     else:
-        mcp.run()   # stdio for Claude Desktop
+        mcp.run()
